@@ -11,7 +11,6 @@ const router = express.Router();
 router.get('/sessions', async (req, res, next) => {
   try {
     const { user_id = 'anonymous' } = req.query;
-    
     const result = await query(
       `SELECT 
         cs.id, cs.title, cs.created_at, cs.updated_at,
@@ -22,7 +21,6 @@ router.get('/sessions', async (req, res, next) => {
       ORDER BY cs.updated_at DESC`,
       [user_id]
     );
-
     res.json(result.rows);
   } catch (error) {
     next(error);
@@ -33,13 +31,12 @@ router.get('/sessions', async (req, res, next) => {
 router.post('/sessions', async (req, res, next) => {
   try {
     const { title, user_id = 'anonymous' } = req.body;
+    console.log(title, user_id," here");
     const sessionId = uuidv4();
-
     const result = await query(
       'INSERT INTO chat_sessions (id, user_id, title) VALUES ($1, $2, $3) RETURNING *',
       [sessionId, user_id, title || 'New Chat']
     );
-
     logger.info(`New chat session created: ${sessionId}`);
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -52,7 +49,6 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
   try {
     const { sessionId } = req.params;
     const { limit = 50, offset = 0 } = req.query;
-
     const result = await query(
       `SELECT 
         id, role, content, metadata, related_chunks, created_at
@@ -62,7 +58,6 @@ router.get('/sessions/:sessionId/messages', async (req, res, next) => {
       LIMIT $2 OFFSET $3`,
       [sessionId, limit, offset]
     );
-
     res.json(result.rows);
   } catch (error) {
     next(error);
@@ -74,6 +69,12 @@ router.post('/sessions/:sessionId/messages', validateChat, async (req, res, next
   try {
     const { sessionId } = req.params;
     const { message, use_documents = true, document_ids = [] } = req.body;
+
+    // Check if session exists
+    const sessionCheck = await query('SELECT id FROM chat_sessions WHERE id = $1', [sessionId]);
+    if (sessionCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Chat session not found' });
+    }
 
     // Save user message
     const userMessageId = uuidv4();
@@ -89,7 +90,7 @@ router.post('/sessions/:sessionId/messages', validateChat, async (req, res, next
       // Perform semantic search to find relevant context
       try {
         const embedding = await ollamaService.generateEmbedding(message);
-        
+
         if (embedding) {
           let contextQuery = `
             SELECT 
@@ -114,12 +115,11 @@ router.post('/sessions/:sessionId/messages', validateChat, async (req, res, next
           contextQuery += ` ORDER BY similarity DESC LIMIT 5`;
 
           const contextResult = await query(contextQuery, contextParams);
-          
+
           if (contextResult.rows.length > 0) {
-            context = contextResult.rows.map(row => 
+            context = contextResult.rows.map(row =>
               `[${row.original_filename} - ${row.section_title || `Chunk ${row.chunk_index}`}]\n${row.content}`
             ).join('\n\n');
-            
             relatedChunks = contextResult.rows.map(row => row.id);
           }
         }
@@ -137,12 +137,12 @@ router.post('/sessions/:sessionId/messages', validateChat, async (req, res, next
     await query(
       'INSERT INTO chat_messages (id, session_id, role, content, related_chunks, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
       [
-        aiMessageId, 
-        sessionId, 
-        'assistant', 
-        aiResponse, 
+        aiMessageId,
+        sessionId,
+        'assistant',
+        aiResponse,
         relatedChunks,
-        { 
+        {
           context_used: context.length > 0,
           related_documents: relatedChunks.length
         }
@@ -181,16 +181,13 @@ router.post('/sessions/:sessionId/messages', validateChat, async (req, res, next
 router.delete('/sessions/:sessionId', async (req, res, next) => {
   try {
     const { sessionId } = req.params;
-    
     const result = await query(
       'DELETE FROM chat_sessions WHERE id = $1 RETURNING *',
       [sessionId]
     );
-
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Chat session not found' });
     }
-
     logger.info(`Chat session deleted: ${sessionId}`);
     res.json({ message: 'Chat session deleted successfully' });
   } catch (error) {
