@@ -80,6 +80,14 @@ CREATE TABLE processing_jobs (
     completed_at TIMESTAMP WITH TIME ZONE
 );
 
+
+CREATE TABLE IF NOT EXISTS users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  email VARCHAR(255) UNIQUE NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Create indexes for better performance
 CREATE INDEX idx_documents_status ON documents(status);
 CREATE INDEX idx_documents_upload_date ON documents(upload_date DESC);
@@ -115,3 +123,5 @@ INSERT INTO documents (filename, original_filename, file_path, file_size, mime_t
 INSERT INTO chat_sessions (user_id, title) VALUES 
 ('demo-user', 'General Questions'),
 ('demo-user', 'Document Analysis');
+
+

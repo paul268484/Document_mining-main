@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { 
   FileText, 
   Search, 
   MessageSquare, 
   LayoutDashboard, 
   Menu,
-  X,
-  Database
+  Database,
+  LogOut
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -21,6 +21,16 @@ const navigation = [
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    // Clear auth token/session
+    localStorage.removeItem("token"); 
+    sessionStorage.removeItem("token"); 
+
+    // Redirect to login
+    navigate("/login");
+  };
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -78,13 +88,21 @@ export default function Layout() {
             })}
           </nav>
 
-          {/* Footer */}
+          {/* Footer with Logout */}
           <div className="flex-shrink-0 border-t border-gray-200 p-4">
-            <div className="text-xs text-gray-500 text-center">
+            <div className="text-xs text-gray-500 text-center mb-4">
               Document Knowledge Mining
               <br />
               v1.0.0
             </div>
+
+            <button
+              onClick={handleLogout}
+              className="w-full flex items-center justify-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-100 transition"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
           </div>
         </div>
       </div>

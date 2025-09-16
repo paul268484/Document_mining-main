@@ -1,336 +1,296 @@
-// import cron from 'node-cron';
-// import { getFromQueue } from '../config/redis.js';
-// import documentProcessor from './documentProcessor.js';
-// import logger from '../utils/logger.js';
-
-// class JobProcessor {
-//   constructor() {
-//     this.isProcessing = false;
-//     this.maxConcurrentJobs = 3;
-//     this.activeJobs = new Set();
-//   }
-
-//   async start() {
-//     logger.info('Starting job processor');
-    
-//     // Process document processing queue
-//     this.processQueue('document_processing', this.handleDocumentProcessing.bind(this));
-    
-//     // Schedule cleanup tasks
-//     this.scheduleCleanupTasks();
-//   }
-
-//   async processQueue(queueName, handler) {
-//     const processNext = async () => {
-//       if (this.activeJobs.size >= this.maxConcurrentJobs) {
-//         setTimeout(processNext, 1000);
-//         return;
-//       }
-
-//       try {
-//         const job = await getFromQueue(queueName);
-//         if (job) {
-//           const jobId = `${queueName}_${Date.now()}_${Math.random()}`;
-//           this.activeJobs.add(jobId);
-          
-//           logger.info(`Processing job from queue ${queueName}:`, job);
-          
-//           handler(job)
-//             .then(() => {
-//               logger.info(`Job completed: ${jobId}`);
-//             })
-//             .catch((error) => {
-//               logger.error(`Job failed: ${jobId}`, error);
-//             })
-//             .finally(() => {
-//               this.activeJobs.delete(jobId);
-//             });
-//         }
-//       } catch (error) {
-//         logger.error(`Error processing queue ${queueName}:`, error);
-//       }
-
-//       // Continue processing
-//       setTimeout(processNext, 1000);
-//     };
-
-//     processNext();
-//   }
-
-//   async handleDocumentProcessing(job) {
-//     const { documentId, filePath, mimeType } = job;
-    
-//     if (!documentId || !filePath || !mimeType) {
-//       throw new Error('Invalid document processing job data');
-//     }
-
-//     await documentProcessor.processDocument(documentId, filePath, mimeType);
-//   }
-
-//   scheduleCleanupTasks() {
-//     // Clean up old completed jobs every hour
-//     cron.schedule('0 * * * *', async () => {
-//       try {
-//         logger.info('Running job cleanup task');
-//         await this.cleanupOldJobs();
-//       } catch (error) {
-//         logger.error('Job cleanup failed:', error);
-//       }
-//     });
-
-//     // Clean up old search queries every day at 2 AM
-//     cron.schedule('0 2 * * *', async () => {
-//       try {
-//         logger.info('Running search query cleanup task');
-//         await this.cleanupOldSearchQueries();
-//       } catch (error) {
-//         logger.error('Search query cleanup failed:', error);
-//       }
-//     });
-
-//     // Health check every 5 minutes
-//     cron.schedule('*/5 * * * *', async () => {
-//       try {
-//         await this.performHealthCheck();
-//       } catch (error) {
-//         logger.error('Health check failed:', error);
-//       }
-//     });
-//   }
-
-//   async cleanupOldJobs() {
-//     const { query } = await import('../config/database.js');
-    
-//     // Delete completed jobs older than 7 days
-//     const result = await query(
-//       "DELETE FROM processing_jobs WHERE status = 'completed' AND completed_at < NOW() - INTERVAL '7 days'"
-//     );
-    
-//     if (result.rowCount > 0) {
-//       logger.info(`Cleaned up ${result.rowCount} old processing jobs`);
-//     }
-//   }
-
-//   async cleanupOldSearchQueries() {
-//     const { query } = await import('../config/database.js');
-    
-//     // Delete search queries older than 30 days
-//     const result = await query(
-//       "DELETE FROM search_queries WHERE created_at < NOW() - INTERVAL '30 days'"
-//     );
-    
-//     if (result.rowCount > 0) {
-//       logger.info(`Cleaned up ${result.rowCount} old search queries`);
-//     }
-//   }
-
-//   async performHealthCheck() {
-//     try {
-//       const { query } = await import('../config/database.js');
-//       const { getRedisClient } = await import('../config/redis.js');
-      
-//       // Check database
-//       await query('SELECT 1');
-      
-//       // Check Redis
-//       const redis = getRedisClient();
-//       await redis.ping();
-      
-//       // Log active jobs count
-//       logger.debug(`Health check passed. Active jobs: ${this.activeJobs.size}`);
-//     } catch (error) {
-//       logger.error('Health check failed:', error);
-//     }
-//   }
-
-//   getStats() {
-//     return {
-//       activeJobs: this.activeJobs.size,
-//       maxConcurrentJobs: this.maxConcurrentJobs
-//     };
-//   }
-// }
-
-// const jobProcessor = new JobProcessor();
-
-// export async function setupJobProcessors() {
-//   await jobProcessor.start();
-//   logger.info('Job processors initialized');
-// }
-
-// export { jobProcessor };
-
-// src/services/jobProcessor.js
-import cron from 'node-cron';
-import { query } from '../config/database.js';
-import { getFromQueue, getRedisClient } from '../config/redis.js';
-import documentProcessor from './documentProcessor.js';
+// src/services/ollamaService.js - Integrated with your project structure
 import logger from '../utils/logger.js';
 
-class JobProcessor {
-  constructor() {
-    this.maxConcurrentJobs = 3;
-    this.activeJobs = new Set();
-  }
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || 'llama3.2';
+const REQUEST_TIMEOUT = parseInt(process.env.OLLAMA_TIMEOUT) || 60000;
 
-  async start() {
-    logger.info('🚀 Starting job processor');
-
-    // Start processing queues
-    this.processQueue('document_processing', this.handleDocumentProcessing.bind(this));
-
-    // Schedule cleanup + health checks
-    this.scheduleCleanupTasks();
-  }
-
-  async processQueue(queueName, handler) {
-    while (true) {
-      try {
-        if (this.activeJobs.size >= this.maxConcurrentJobs) {
-          await this.sleep(1000);
-          continue;
-        }
-
-        logger.debug(`Waiting for job from queue: ${queueName}`);
-        const job = await getFromQueue(queueName);
-
-        if (!job) {
-          await this.sleep(1000);
-          continue;
-        }
-
-        const jobId = `${queueName}_${Date.now()}_${Math.random()}`;
-        this.activeJobs.add(jobId);
-
-        logger.info(`Processing job: ${jobId}`, job);
-
-        handler(job)
-          .then(() => {
-            logger.info(`✅ Job completed: ${jobId}`);
-          })
-          .catch(async (error) => {
-            logger.error(`❌ Job failed: ${jobId}`, error);
-          })
-          .finally(() => {
-            this.activeJobs.delete(jobId);
-          });
-      } catch (error) {
-        logger.error(`Error processing queue ${queueName}:`, error);
-        await this.sleep(1000);
-      }
-    }
-  }
-
-  async handleDocumentProcessing(job) {
-    const { documentId, filePath, mimeType } = job;
-
-    if (!documentId || !filePath || !mimeType) {
-      throw new Error('Invalid document processing job data');
-    }
-
+export const setupJobProcessors = {
+  /**
+   * Check if Ollama is available
+   */
+  async isAvailable() {
     try {
-      // Update job to "processing"
-      await query(
-        "UPDATE processing_jobs SET status = 'processing', started_at = NOW() WHERE document_id = $1",
-        [documentId]
-      );
-
-      await documentProcessor.processDocument(documentId, filePath, mimeType);
-
-      // Mark completed
-      await query(
-        "UPDATE processing_jobs SET status = 'completed', completed_at = NOW() WHERE document_id = $1",
-        [documentId]
-      );
-    } catch (err) {
-      // Mark failed
-      await query(
-        "UPDATE processing_jobs SET status = 'failed', error_message = $2, completed_at = NOW() WHERE document_id = $1",
-        [documentId, err.message]
-      );
-      throw err;
-    }
-  }
-
-  scheduleCleanupTasks() {
-    // Clean up old completed jobs every hour
-    cron.schedule('0 * * * *', async () => {
-      try {
-        logger.info('🧹 Running job cleanup task');
-        await this.cleanupOldJobs();
-      } catch (error) {
-        logger.error('Job cleanup failed:', error);
+      logger.debug(`Checking Ollama availability at ${OLLAMA_BASE_URL}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/version`, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      const isAvailable = response.ok;
+      logger.info(`Ollama availability: ${isAvailable ? '✅ Available' : '❌ Unavailable'}`);
+      
+      if (isAvailable) {
+        const versionData = await response.json();
+        logger.debug('Ollama version:', versionData);
       }
-    });
-
-    // Clean up old search queries every day at 2 AM
-    cron.schedule('0 2 * * *', async () => {
-      try {
-        logger.info('🧹 Running search query cleanup task');
-        await this.cleanupOldSearchQueries();
-      } catch (error) {
-        logger.error('Search query cleanup failed:', error);
-      }
-    });
-
-    // Health check every 5 minutes
-    cron.schedule('*/5 * * * *', async () => {
-      try {
-        await this.performHealthCheck();
-      } catch (error) {
-        logger.error('Health check failed:', error);
-      }
-    });
-  }
-
-  async cleanupOldJobs() {
-    const result = await query(
-      "DELETE FROM processing_jobs WHERE status = 'completed' AND completed_at < NOW() - INTERVAL '7 days'"
-    );
-
-    if (result.rowCount > 0) {
-      logger.info(`Cleaned up ${result.rowCount} old processing jobs`);
-    }
-  }
-
-  async cleanupOldSearchQueries() {
-    const result = await query(
-      "DELETE FROM search_queries WHERE created_at < NOW() - INTERVAL '30 days'"
-    );
-
-    if (result.rowCount > 0) {
-      logger.info(`Cleaned up ${result.rowCount} old search queries`);
-    }
-  }
-
-  async performHealthCheck() {
-    try {
-      await query('SELECT 1'); // DB check
-      const redis = getRedisClient();
-      await redis.ping(); // Redis check
-      logger.debug(`✅ Health check passed. Active jobs: ${this.activeJobs.size}`);
+      
+      return isAvailable;
     } catch (error) {
-      logger.error('❌ Health check failed:', error);
+      if (error.name === 'AbortError') {
+        logger.error('Ollama availability check timed out');
+      } else {
+        logger.error('Ollama availability check failed:', error.message);
+      }
+      return false;
+    }
+  },
+
+  /**
+   * Generate embeddings for a text using Ollama's embedding API
+   * @param {string} text - The text to generate embeddings for
+   * @param {string} model - Model to use for embeddings
+   * @returns {Promise<number[]>} - Embedding vector
+   */
+  async generateEmbedding(text, model = DEFAULT_MODEL) {
+    try {
+      logger.debug(`Generating embedding for text length: ${text.length} with model: ${model}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          model: model, 
+          prompt: text.substring(0, 2000) // Limit text length to prevent timeout
+        }),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Ollama embeddings API error (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.embedding || !Array.isArray(data.embedding)) {
+        throw new Error('Invalid embedding response from Ollama');
+      }
+      
+      logger.debug(`Embedding generated successfully, dimensions: ${data.embedding.length}`);
+      return data.embedding;
+    } catch (error) {
+      logger.error('Error generating embedding:', error.message);
+      throw new Error(`Failed to generate embedding: ${error.message}`);
+    }
+  },
+
+  /**
+   * Generate AI response with optional document context
+   * @param {string} prompt - User question or prompt
+   * @param {string} context - Optional context text from documents
+   * @param {Array} chatHistory - Previous messages for context
+   * @param {string} model - Model to use
+   * @returns {Promise<{ message: { content: string } }>}
+   */
+  async generateWithContext(prompt, context = '', chatHistory = [], model = DEFAULT_MODEL) {
+    try {
+      logger.info(`Generating response with model: ${model}`);
+      
+      // Build the full prompt
+      const fullPrompt = this.buildPrompt(prompt, context, chatHistory);
+      logger.debug(`Full prompt length: ${fullPrompt.length} characters`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      const requestBody = { 
+        model, 
+        prompt: fullPrompt, 
+        stream: false,
+        options: {
+          temperature: parseFloat(process.env.OLLAMA_TEMPERATURE) || 0.7,
+          top_p: parseFloat(process.env.OLLAMA_TOP_P) || 0.9,
+          num_predict: parseInt(process.env.OLLAMA_MAX_TOKENS) || 2000,
+          stop: ['Human:', 'User:', '\n\nHuman:', '\n\nUser:']
+        }
+      };
+
+      logger.debug('Ollama request options:', requestBody.options);
+
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error(`Ollama generate API error (${response.status}): ${errorText}`);
+        
+        // Handle specific error cases
+        if (response.status === 404) {
+          throw new Error(`Model '${model}' not found. Available models can be checked with 'ollama list'`);
+        } else if (response.status === 400) {
+          throw new Error('Invalid request format or parameters');
+        } else {
+          throw new Error(`Ollama API error (${response.status}): ${errorText}`);
+        }
+      }
+
+      const data = await response.json();
+      
+      if (!data.response || typeof data.response !== 'string') {
+        logger.warn('Empty or invalid response from Ollama:', data);
+        throw new Error('Invalid response format from AI service');
+      }
+
+      const responseText = data.response.trim();
+      logger.info(`AI response generated successfully (${responseText.length} characters)`);
+      
+      return { 
+        message: { 
+          content: responseText || 'I apologize, but I couldn\'t generate a response. Please try again.' 
+        } 
+      };
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        logger.error(`AI response generation timed out after ${REQUEST_TIMEOUT}ms`);
+        throw new Error('Request timed out. Please try again with a shorter message.');
+      }
+      
+      logger.error('Error generating AI response:', error.message);
+      throw error; // Re-throw to preserve original error details
+    }
+  },
+
+  /**
+   * Build prompt with context and chat history
+   * @param {string} userMessage - The user's message
+   * @param {string} documentContext - Document context if available
+   * @param {Array} chatHistory - Previous conversation messages
+   * @returns {string} - Formatted prompt
+   */
+  buildPrompt(userMessage, documentContext, chatHistory) {
+    let prompt = 'You are a helpful AI assistant specialized in document analysis and general knowledge. ';
+    
+    // Add document context if available
+    if (documentContext && documentContext.trim()) {
+      prompt += `Use the following document context to help answer questions, but also use your general knowledge when appropriate.\n\n`;
+      prompt += `DOCUMENT CONTEXT:\n${documentContext.trim()}\n\n`;
+      prompt += `Instructions:\n`;
+      prompt += `- Answer based on the context above when relevant\n`;
+      prompt += `- If the context doesn't contain relevant information, use your general knowledge\n`;
+      prompt += `- Always be helpful, accurate, and informative\n`;
+      prompt += `- Cite the context when you use information from it\n\n`;
+    }
+    
+    // Add recent chat history for continuity (last 5 messages to avoid token limits)
+    if (chatHistory && chatHistory.length > 0) {
+      prompt += 'Recent conversation for context:\n';
+      const recentHistory = chatHistory.slice(-5);
+      recentHistory.forEach((msg, index) => {
+        if (msg.role === 'user') {
+          prompt += `Human: ${msg.content}\n`;
+        } else if (msg.role === 'assistant') {
+          prompt += `Assistant: ${msg.content}\n`;
+        }
+      });
+      prompt += '\n';
+    }
+    
+    // Add the current user message
+    prompt += `Human: ${userMessage}\n`;
+    prompt += `Assistant: `;
+    
+    return prompt;
+  },
+
+  /**
+   * Get available models from Ollama
+   * @returns {Promise<Array>} - List of available models
+   */
+  async getAvailableModels() {
+    try {
+      logger.info('Fetching available models from Ollama...');
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models (${response.status}): ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      const models = data.models || [];
+      
+      logger.info(`Found ${models.length} available models:`, models.map(m => m.name));
+      return models;
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        logger.error('Fetching models timed out');
+      } else {
+        logger.error('Error fetching available models:', error.message);
+      }
+      return [];
+    }
+  },
+
+  /**
+   * Pull a model if it doesn't exist
+   * @param {string} modelName - Name of the model to pull
+   * @returns {Promise<boolean>} - Success status
+   */
+  async pullModel(modelName) {
+    try {
+      logger.info(`Attempting to pull model: ${modelName}`);
+      
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to pull model (${response.status})`);
+      }
+
+      logger.info(`Model ${modelName} pulled successfully`);
+      return true;
+    } catch (error) {
+      logger.error(`Error pulling model ${modelName}:`, error.message);
+      return false;
+    }
+  },
+
+  /**
+   * Check if a specific model is available
+   * @param {string} modelName - Name of the model to check
+   * @returns {Promise<boolean>} - Whether the model is available
+   */
+  async isModelAvailable(modelName) {
+    try {
+      const models = await this.getAvailableModels();
+      return models.some(model => model.name === modelName);
+    } catch (error) {
+      logger.error(`Error checking model availability for ${modelName}:`, error.message);
+      return false;
     }
   }
-
-  getStats() {
-    return {
-      activeJobs: this.activeJobs.size,
-      maxConcurrentJobs: this.maxConcurrentJobs,
-    };
-  }
-
-  sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-}
-
-const jobProcessor = new JobProcessor();
-
-export async function setupJobProcessors() {
-  await jobProcessor.start();
-  logger.info('Job processors initialized');
-}
-
-export { jobProcessor };
+};

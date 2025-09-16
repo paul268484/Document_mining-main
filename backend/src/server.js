@@ -13,6 +13,7 @@ import { requestLogger } from '../src/middleware/requestLogger.js';
 import logger from '../src/utils/logger.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerSpec from '../src/config/swagger.js';
+import authRoutes from '../src/routes/auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -58,6 +59,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 /* ------------------- LOGGING ------------------- */
 app.use(requestLogger);
+app.use('/api/auth', authRoutes);
 
 /* ------------------- STATIC FILES ------------------- */
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -90,7 +92,9 @@ app.get('/', (req, res) => {
       documents: '/api/documents',
       search: '/api/search',
       chat: '/api/chat',
-      admin: '/api/admin'
+      admin: '/api/admin',
+      auth: '/api/auth'
+      
     }
   });
 });
