@@ -189,17 +189,24 @@ router.post('/upload', upload.single('document'), validateDocument, async (req, 
       logger.warn('file_path column not found, skipping file path update');
     }
 
-    // Add document processing job to queue
+    // Add document processing job to queue with retries
     try {
       await addToQueue('document_processing', {
         documentId,
         filePath: file.path,
         mimeType: file.mimetype,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        retryCount: 0,
+        maxRetries: 3
       });
       logger.info(`Added processing job for document: ${documentId}`);
     } catch (queueError) {
-      logger.warn('Failed to add job to queue:', queueError.message);
+      logger.error('Failed to add job to queue:', queueError.message);
+      // Update document status to failed if queue is unavailable
+      await query(
+        'UPDATE documents SET status = $1, error_message = $2 WHERE id = $3',
+        ['failed', 'Failed to queue document for processing: ' + queueError.message, documentId]
+      );
     }
 
     logger.info(`Document uploaded: ${documentId}`, {

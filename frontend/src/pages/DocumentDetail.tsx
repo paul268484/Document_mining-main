@@ -137,16 +137,16 @@ export default function DocumentDetail() {
         );
       case 'processing':
         return (
-          <span className={`${baseClasses} bg-yellow-100 text-yellow-800`}>
-            <Clock className="w-4 h-4 mr-1" />
-            Processing
+          <span className={baseClasses + ' bg-yellow-100 text-yellow-800'}>
+            <LoadingSpinner size="small" className="mr-1.5 text-yellow-800" />
+            Processing Your Document
           </span>
         );
       case 'pending':
         return (
-          <span className={`${baseClasses} bg-gray-100 text-gray-800`}>
-            <Clock className="w-4 h-4 mr-1" />
-            Pending
+          <span className={baseClasses + ' bg-blue-100 text-blue-800'}>
+            <LoadingSpinner size="small" className="mr-1.5 text-blue-800" />
+            In Processing Queue
           </span>
         );
       case 'failed':
